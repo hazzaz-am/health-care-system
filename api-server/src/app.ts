@@ -5,6 +5,8 @@ import notFound from './app/middlewares/notFound';
 import config from './config';
 import { uptime } from 'process';
 import { timeStamp } from 'console';
+import router from './app/routes';
+import { userRoutes } from './app/modules/user/user.route';
 
 const app: Application = express();
 app.use(cors({
@@ -25,6 +27,12 @@ app.get('/', (req: Request, res: Response) => {
         timeStamp: new Date().toISOString()
     })
 });
+
+/**
+ * Routes
+ */
+app.use("/api/v1", router)
+
 
 /**
  * Global Error Handler
