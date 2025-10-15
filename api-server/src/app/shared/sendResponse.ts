@@ -7,7 +7,8 @@ const sendResponse = <T>(res: Response, jsonData: {
     meta?: {
         page: number,
         limit: number,
-        total: number
+        total: number,
+        totalPages: number
     },
     data: T | null | undefined
 }) => {

@@ -3,11 +3,12 @@ import { UserController } from "./user.controller";
 import { validateRequest } from "../../middlewares/validateRequest";
 import { UserValidation } from "./user.validation";
 import { FileUploader } from "../../helpers/fileUploader";
+import { authorization } from "../../middlewares/authorization";
 
 const router = Router();
 
 /**
- * Create a new patient
+ * Create a new Patient
  * @route POST /api/v1/user/create-patient
  */
 router.post(
@@ -20,5 +21,38 @@ router.post(
 		return UserController.createPatient(req, res, next);
 	}
 );
+
+/**
+ * Create a new Doctor
+ * @route POST /api/v1/user/create-doctor
+ */
+router.post(
+	"/create-doctor",
+	FileUploader.uploadImage.single("file"),
+	(req, res, next) => {
+		req.body = UserValidation.createDoctorSchema.parse(
+			JSON.parse(req.body.data)
+		);
+		return UserController.createDoctor(req, res, next);
+	}
+);
+
+/**
+ * Create a new Admin
+ * @route POST /api/v1/user/create-admin
+ */
+router.post(
+	"/create-admin",
+	authorization("SUPER_ADMIN"),
+	FileUploader.uploadImage.single("file"),
+	(req, res, next) => {
+		req.body = UserValidation.createAdminSchema.parse(
+			JSON.parse(req.body.data)
+		);
+		return UserController.createAdmin(req, res, next);
+	}
+);
+
+router.get("/", authorization("SUPER_ADMIN", "ADMIN"), UserController.getUsersFromDB);
 
 export const userRoutes = router;

@@ -1,0 +1,30 @@
+import { UserRole } from "@prisma/client";
+import { NextFunction, Request, Response } from "express";
+import AppError from "../errors/AppError";
+import httpStatus from 'http-status';
+import { JwtTokens } from "../helpers/jwtTokens";
+import config from "../../config";
+
+export const authorization = (...roles: UserRole[]) => {
+  return async (req: Request & { user?: any }, res: Response, next: NextFunction) => {
+    try {
+      const accessToken = req.cookies.accessToken;
+      if (!accessToken) {
+        throw new AppError(httpStatus.UNAUTHORIZED, "You are not authorized");
+      }
+      const verifiedUser = JwtTokens.verifyToken(accessToken, config.jwt.accessToken);
+
+      if (!verifiedUser) {
+        throw new AppError(httpStatus.UNAUTHORIZED, "You are not authorized to access this resource");
+      }
+      req.user = verifiedUser;
+
+      if (roles.length && !roles.includes(verifiedUser.role)) {
+        throw new AppError(httpStatus.FORBIDDEN, "You do not have permission to access this resource");
+      }
+      next();
+    } catch (error) {
+      next(error);
+    }
+  }
+}
