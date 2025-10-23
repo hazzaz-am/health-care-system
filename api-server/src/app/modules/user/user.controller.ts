@@ -3,7 +3,6 @@ import catchAsync from "../../shared/catchAsync";
 import { UserService } from "./user.service";
 import sendResponse from "../../shared/sendResponse";
 import httpStatus from "http-status";
-import { UserRole, UserStatus } from "@prisma/client";
 import { pickFields } from "../../helpers/pickFields";
 
 /**

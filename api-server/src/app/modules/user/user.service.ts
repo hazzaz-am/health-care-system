@@ -3,8 +3,7 @@ import config from "../../../config";
 import { prisma } from "../../shared/prisma";
 import bcrypt from "bcryptjs";
 import { FileUploader } from "../../helpers/fileUploader";
-import { Prisma, UserRole, UserStatus } from "@prisma/client";
-import { GetUsersDto, IOptions } from "./user.interface";
+import { Prisma, UserRole } from "@prisma/client";
 import { getPagination } from "../../helpers/getPagination";
 import { UserConstants } from "./user.constants";
 

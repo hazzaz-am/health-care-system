@@ -4,14 +4,7 @@ import AppError from "../errors/AppError";
 import httpStatus from 'http-status';
 import { JwtTokens } from "../helpers/jwtTokens";
 import config from "../../config";
-
-// Define a proper type for the authenticated user
-interface AuthenticatedUser {
-  id: string;
-  email: string;
-  role: UserRole;
-  // Add other fields from your JWT payload
-}
+import { AuthenticatedUser } from "../types";
 
 // Extend Express Request type
 declare global {
