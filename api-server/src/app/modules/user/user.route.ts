@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { UserController } from "./user.controller";
-import { validateRequest } from "../../middlewares/validateRequest";
 import { UserValidation } from "./user.validation";
 import { FileUploader } from "../../helpers/fileUploader";
 import { authorization } from "../../middlewares/authorization";
+import { UserRole } from "@prisma/client";
 
 const router = Router();
 
@@ -28,6 +28,7 @@ router.post(
  */
 router.post(
 	"/create-doctor",
+	authorization(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DOCTOR),
 	FileUploader.uploadImage.single("file"),
 	(req, res, next) => {
 		req.body = UserValidation.createDoctorSchema.parse(
@@ -43,7 +44,7 @@ router.post(
  */
 router.post(
 	"/create-admin",
-	authorization("SUPER_ADMIN"),
+	authorization(UserRole.SUPER_ADMIN),
 	FileUploader.uploadImage.single("file"),
 	(req, res, next) => {
 		req.body = UserValidation.createAdminSchema.parse(
@@ -53,6 +54,10 @@ router.post(
 	}
 );
 
-router.get("/", authorization("SUPER_ADMIN", "ADMIN"), UserController.getUsersFromDB);
+router.get(
+	"/",
+	authorization(UserRole.SUPER_ADMIN, UserRole.ADMIN),
+	UserController.getUsersFromDB
+);
 
 export const userRoutes = router;

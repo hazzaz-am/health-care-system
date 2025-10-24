@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import httpStatus from "http-status";
 import { Prisma } from "@prisma/client";
-import { ZodError } from "zod";
+import z, { ZodError } from "zod";
 import config from "../../config";
 
 interface IErrorResponse {
@@ -13,8 +13,8 @@ interface IErrorResponse {
 
 const handleZodError = (err: ZodError): IErrorResponse => {
 	const errors = err.issues.map((issue) => ({
-		path: issue.path.join("."),
-		message: issue.message,
+		code: issue.code, // the issue code
+		message: issue.message, // the error message
 	}));
 
 	return {
@@ -27,6 +27,17 @@ const handleZodError = (err: ZodError): IErrorResponse => {
 
 const handlePrismaValidationError = (
 	err: Prisma.PrismaClientValidationError
+): IErrorResponse => {
+	return {
+		statusCode: httpStatus.BAD_REQUEST,
+		success: false,
+		message: "Validation error",
+		error: config.node_env === "production" ? null : err.message,
+	};
+};
+
+const handlePrismaClientInitializationError = (
+	err: Prisma.PrismaClientInitializationError
 ): IErrorResponse => {
 	return {
 		statusCode: httpStatus.BAD_REQUEST,
@@ -65,6 +76,19 @@ const handlePrismaKnownError = (
 	};
 };
 
+const handlePrismaClientUnknownRequestError = (
+	err: Prisma.PrismaClientUnknownRequestError
+): IErrorResponse => {
+
+
+	return {
+		statusCode: httpStatus.INTERNAL_SERVER_ERROR,
+		success: false,
+		message: "Internal server error",
+		error: config.node_env === "production" ? null : err.message,
+	};
+};
+
 const globalErrorHandler = (
 	err: any,
 	_req: Request,
@@ -73,7 +97,7 @@ const globalErrorHandler = (
 ) => {
 	let statusCode = err.statusCode || httpStatus.INTERNAL_SERVER_ERROR;
 	let success = false;
-	let message = err.message || "Something went wrong!";
+	let message = err.message || "Something went wrong in server!";
 	let error = err;
 
 	// Handle Zod validation errors
@@ -84,15 +108,29 @@ const globalErrorHandler = (
 		error = simplified.error;
 	}
 	// Handle Prisma validation errors
-	else if (err instanceof Prisma.PrismaClientValidationError) {
+	if (err instanceof Prisma.PrismaClientValidationError) {
 		const simplified = handlePrismaValidationError(err);
 		statusCode = simplified.statusCode;
 		message = simplified.message;
 		error = simplified.error;
 	}
+	// Handle Prisma initialization errors
+	if (err instanceof Prisma.PrismaClientInitializationError) {
+		const simplified = handlePrismaClientInitializationError(err);
+		statusCode = simplified.statusCode;
+		message = simplified.message;
+		error = simplified.error;
+	}
 	// Handle Prisma known request errors
-	else if (err instanceof Prisma.PrismaClientKnownRequestError) {
+	if (err instanceof Prisma.PrismaClientKnownRequestError) {
 		const simplified = handlePrismaKnownError(err);
+		statusCode = simplified.statusCode;
+		message = simplified.message;
+		error = simplified.error;
+	}
+
+	if (err instanceof Prisma.PrismaClientUnknownRequestError) {
+		const simplified = handlePrismaClientUnknownRequestError(err);
 		statusCode = simplified.statusCode;
 		message = simplified.message;
 		error = simplified.error;
