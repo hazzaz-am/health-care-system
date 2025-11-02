@@ -92,8 +92,14 @@ const updateDoctorInfo = async (id: string, req: Request) => {
 	const payload: Partial<IDoctorUpdatePayload> = req.body;
 	const user = req.user as AuthenticatedUser;
 
+	const doctorInfo = await prisma.doctor.findUniqueOrThrow({
+		where: {
+			id,
+		},
+	});
+
 	if (
-		id !== user.id &&
+		doctorInfo.email !== user.email &&
 		user.role !== UserRole.ADMIN &&
 		user.role !== UserRole.SUPER_ADMIN
 	) {
@@ -102,12 +108,6 @@ const updateDoctorInfo = async (id: string, req: Request) => {
 			"You are not authorized to update this doctor's information"
 		);
 	}
-
-	const doctorInfo = await prisma.doctor.findUniqueOrThrow({
-		where: {
-			id,
-		},
-	});
 
 	const { specialties, ...doctorData } = payload;
 
@@ -162,9 +162,15 @@ const deleteDoctorById = async (
 	id: string,
 	loggedInUser: AuthenticatedUser | undefined
 ) => {
+	const doctorInfo = await prisma.doctor.findUniqueOrThrow({
+		where: {
+			id,
+		},
+	});
+
 	if (
 		loggedInUser &&
-		(id === loggedInUser.id ||
+		(doctorInfo.email === loggedInUser.email ||
 			loggedInUser.role === UserRole.ADMIN ||
 			loggedInUser.role === UserRole.SUPER_ADMIN)
 	) {

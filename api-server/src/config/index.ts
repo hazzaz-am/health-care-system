@@ -17,4 +17,9 @@ export default {
 		accessTokenExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN as string,
 		refreshTokenExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN as string,
 	},
+	superAdmin: {
+		super_admin_email: process.env.SUPER_ADMIN_EMAIL as string,
+		super_admin_password: process.env.SUPER_ADMIN_PASSWORD as string,
+		super_admin_contact_number: process.env.SUPER_ADMIN_NUMBER as string,
+	},
 };

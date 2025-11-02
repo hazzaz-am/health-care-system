@@ -1,6 +1,7 @@
 import { Server } from "http";
 import app from "./app";
 import config from "./config";
+import { seedSuperAdmin } from "./app/utils/seedSuperAdmin";
 
 async function bootstrap() {
 	// This variable will hold our server instance
@@ -44,4 +45,7 @@ async function bootstrap() {
 	}
 }
 
-bootstrap();
+(async () => {
+	await bootstrap();
+	await seedSuperAdmin();
+})();
