@@ -1,0 +1,22 @@
+// Prisma 7 schema.
+//
+// The models intentionally live elsewhere: add your own below. Two things
+// differ from every Prisma 6 tutorial and are already handled here:
+//   1. The generator provider is `prisma-client` (not `prisma-client-js`) and
+//      `output` is REQUIRED — the client is no longer emitted into node_modules.
+//   2. The datasource has no `url`; the connection string lives in
+//      prisma.config.ts.
+//
+// After adding a model, run `pnpm db:generate` (and `pnpm db:migrate` to create
+// a migration), or nothing will compile: the client is generated into
+// src/generated/, which is gitignored.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
