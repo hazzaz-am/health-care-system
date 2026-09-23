@@ -19,7 +19,6 @@ src/
     health.routes.ts          /healthz (liveness) + /readyz (readiness)
   modules/
     health/health.service.ts  database readiness probe
-    patient/                  full feature slice: routes -> controller -> service -> repo
   db/client.ts                PrismaClient + pg driver adapter (required in v7)
   lib/errors.ts               AppError hierarchy
   lib/asyncContext.ts         AsyncLocalStorage request scope
@@ -45,8 +44,7 @@ pnpm dev                  # http://localhost:3000
 ```
 
 `prisma/schema.prisma` currently has **no models** — add your own. Until you do,
-`pnpm db:migrate` has nothing to apply, and the patient API (which uses an
-in-memory repository) runs without a database. After adding models:
+`pnpm db:migrate` has nothing to apply. After adding models, run:
 
 ```bash
 pnpm db:generate
@@ -59,7 +57,6 @@ Verify:
 curl http://localhost:3000/healthz   # liveness
 curl http://localhost:3000/readyz    # readiness (probes the database)
 curl http://localhost:3000/api/v1
-curl -H "Authorization: Bearer token" http://localhost:3000/api/v1/patients
 ```
 
 ## Scripts
@@ -132,48 +129,13 @@ middleware by arity; drop the unused `next` and it silently stops catching anyth
 **PHI redaction.** `config/logger.ts` redacts authorization headers, cookies,
 and common PHI fields. Extend the `redact.paths` list as the schema grows.
 
-## Wiring up the Prisma repository
-
-`patient.service.ts` currently uses `InMemoryPatientRepository`, so the API runs
-with no database. State is per-process and lost on restart — replace before
-production:
-
-```ts
-// src/modules/patient/patient.prisma.repo.ts
-import { prisma } from '../../db/client.js'
-import type { PatientRepository } from './patient.types.js'
-
-export class PatientPrismaRepository implements PatientRepository {
-  async findAll({ limit, offset }) {
-    const rows = await prisma.patient.findMany({
-      take: limit,
-      skip: offset,
-      orderBy: { createdAt: 'asc' },
-    })
-    return rows.map((row) => ({ ...row, dateOfBirth: row.dateOfBirth.toISOString().slice(0, 10) }))
-  }
-
-  async findById(id) {
-    const row = await prisma.patient.findUnique({ where: { id } })
-    return row === null ? null : { ...row, dateOfBirth: row.dateOfBirth.toISOString().slice(0, 10) }
-  }
-
-  // ...count, findByEmail, create, update, delete
-}
-```
-
-Then in `patient.service.ts`:
-
-```ts
-export const patientService = new PatientService(new PatientPrismaRepository())
-```
 
 No controller, route, or test changes — that is the point of the port.
 
 ## Database migrations
 
 ```bash
-pnpm db:migrate --name add_patient   # dev: create + apply
+pnpm db:migrate   # dev: create + apply
 pnpm db:deploy                       # prod: apply pending only
 pnpm db:studio                       # browse data
 ```

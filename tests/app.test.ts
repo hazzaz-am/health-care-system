@@ -64,21 +64,4 @@ describe('application shell', () => {
     expect(body.error.code).toBe('NOT_FOUND')
     expect(body.error.requestId).toBeTruthy()
   })
-
-  it('rejects oversized request bodies before handlers run', async () => {
-    const res = await request(app)
-      .post('/api/v1/patients')
-      .set('Authorization', 'Bearer test-token')
-      .send({ firstName: 'x'.repeat(2 * 1024 * 1024) })
-
-    expect(res.status).toBe(413)
-  })
-
-  it('returns 401 without a bearer token on protected routes', async () => {
-    const res = await request(app).get('/api/v1/patients')
-    const body = res.body as ErrorPayload
-
-    expect(res.status).toBe(401)
-    expect(body.error.code).toBe('UNAUTHORIZED')
-  })
 })

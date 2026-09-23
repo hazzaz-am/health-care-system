@@ -9,5 +9,4 @@ apiRouter.get('/', (_req: Request, res: Response) => {
   res.json({ version: 'v1', name: 'health-care-system' })
 })
 
-// apiRouter.use('/patients', patientRouter)
 apiRouter.use('/specialties', specialtyRouter)
