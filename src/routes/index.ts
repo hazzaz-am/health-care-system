@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import type { Request, Response } from 'express'
+import { specialtyRouter } from '../modules/specialty/specialty.routes.js'
 
 export const apiRouter: Router = Router()
 
@@ -9,3 +10,4 @@ apiRouter.get('/', (_req: Request, res: Response) => {
 })
 
 // apiRouter.use('/patients', patientRouter)
+apiRouter.use('/specialties', specialtyRouter)
