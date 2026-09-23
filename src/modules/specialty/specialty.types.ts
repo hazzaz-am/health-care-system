@@ -1,6 +1,5 @@
 import type { Prisma, Specialty as SpecialtyModel } from '../../generated/prisma/client.js'
 
-
 export type Specialty = Omit<SpecialtyModel, 'isDeleted' | 'deletedAt'>
 
 export type CreateSpecialtyData = Pick<

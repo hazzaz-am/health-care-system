@@ -71,7 +71,111 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   res.status(statusCode).json(body)
 }
 
-function toResponse(
+/**
+ * Postgres reports the offending key columns in the `detail` field, e.g.
+ * `Key (title)=(Cardiology) already exists.` Capturing only the names left of
+ * `)=` means the conflicting *value* is never read.
+ *
+ * Not every violation carries this: the driver adapter parses `detail` to build
+ * `constraint.index` and then drops it, so a uniquely-indexed column arrives
+ * with no detail line at all. That is why `indexColumn` below exists.
+ */
+const KEY_DETAIL = /Key \(([^)]+)\)=/
+
+/**
+ * Prisma names a single-column unique index `<table>_<column>_key`, so the
+ * column is whatever sits between the first underscore and the `_key` suffix.
+ * Anchored on both ends to avoid matching an unrelated string that merely
+ * contains `_key`.
+ */
+const NAMED_KEY_INDEX = /^[^_]+_(.+)_key$/
+
+/** A bare SQL identifier. Rejects schema-qualified names and anything punctuated. */
+const SAFE_COLUMN = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** A plain object we can safely read properties from. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/**
+ * Split a comma-separated column list (Postgres's `detail` shape) and keep only
+ * bare SQL identifiers.
+ */
+function splitColumns(value: string): string[] {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => SAFE_COLUMN.test(part))
+}
+
+/**
+ * Recover the column from a named single-column unique index, inverting
+ * Prisma's `<table>_<column>_key` naming.
+ *
+ * `undefined` when the name does not fit that shape, which is the honest answer
+ * for a hand-written multi-column index: `a_b_c_key` does not say where the
+ * table ends and the column starts, so guessing could name a nonexistent field.
+ */
+function indexColumn(index: unknown): string | undefined {
+  if (typeof index !== 'string') return undefined
+  const column = NAMED_KEY_INDEX.exec(index)?.[1]
+  return column !== undefined && SAFE_COLUMN.test(column) ? column : undefined
+}
+
+/**
+ * The columns that collided in a Prisma `P2002`, or `[]` to stay generic.
+ *
+ * Exported so it can be tested against each metadata shape directly; the
+ * `P2002` branch below is its only production caller.
+ *
+ * The constraint lives at `meta.driverAdapterError.cause` — *not* at the
+ * `meta.target` that older engine-based Prisma exposed. Three sources are read,
+ * in order of what they can actually be trusted to say:
+ *
+ * 1. Postgres's `detail` line, when present. It is the only source that names
+ *    every column of a composite key.
+ * 2. `constraint.index`, the physical index name, which is the *only* source a
+ *    named-index violation has. It names one column, inferred from the name.
+ * 3. `constraint.fields`, an array the adapter fills in only when Postgres
+ *    reported no constraint name. In practice this is rare, because a unique
+ *    index almost always has a name — it is kept because the cost is two lines.
+ *
+ * These are **database column names**, not Prisma model field names. The two
+ * coincide today because the schema declares no `@map`. Add
+ * `@map("specialty_title")` and source 2 yields `specialty_title`, while source
+ * 1 would still yield the true column — so the result is a column name either
+ * way, and inverting it would need the generated client's runtime data model.
+ */
+export function p2002Fields(meta: Record<string, unknown> | undefined): string[] {
+  const adapterError = meta?.driverAdapterError
+  if (!isRecord(adapterError)) return []
+
+  const cause = adapterError.cause
+  if (!isRecord(cause)) return []
+
+  const fromDetail =
+    typeof cause.originalMessage === 'string'
+      ? KEY_DETAIL.exec(cause.originalMessage)?.[1]
+      : undefined
+  if (fromDetail !== undefined) {
+    const columns = splitColumns(fromDetail)
+    if (columns.length > 0) return [...new Set(columns)]
+  }
+
+  const constraint = isRecord(cause.constraint) ? cause.constraint : undefined
+
+  const fromIndex = indexColumn(constraint?.index)
+  if (fromIndex !== undefined) return [fromIndex]
+
+  const fields = constraint?.fields
+  if (!Array.isArray(fields)) return []
+
+  const columns = fields.flatMap((field) => (typeof field === 'string' ? splitColumns(field) : []))
+  return [...new Set(columns)]
+}
+
+export function toResponse(
   err: unknown,
   requestId: string | undefined,
 ): {
@@ -119,18 +223,33 @@ function toResponse(
     }
   }
 
-  // 2. Known Prisma failures we can map to meaningful status codes without
-  //    leaking column names or constraint identifiers.
+  // 2. Known Prisma failures we can map to meaningful status codes. The field
+  //    names below come from Postgres's own error detail; constraint
+  //    identifiers and offending values are never forwarded. See
+  //    `p2002Fields` for what is and is not safe to expose.
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
     switch (err.code) {
-      case 'P2002':
+      case 'P2002': {
+        const fields = p2002Fields(err.meta)
         return {
           statusCode: 409,
           logLevel: 'warn',
           body: {
-            error: { code: 'CONFLICT', message: 'Resource already exists', requestId },
+            error: {
+              code: 'CONFLICT',
+              // Naming the field lets a client attach the error to the right
+              // input — which matters because this branch also catches the
+              // create/update races a service's own uniqueness pre-check cannot.
+              message:
+                fields.length > 0
+                  ? `A record with this ${fields.join(', ')} already exists`
+                  : 'Resource already exists',
+              requestId,
+              ...(fields.length === 0 ? {} : { details: { fields } }),
+            },
           },
         }
+      }
       case 'P2025':
         return {
           statusCode: 404,

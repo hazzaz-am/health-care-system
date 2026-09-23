@@ -1,10 +1,10 @@
 import type { Request, Response } from 'express'
-import { specialtyService } from './specialty.service.js'
 import type {
   CreateSpecialtyInput,
   ListSpecialtiesQuery,
   UpdateSpecialtyInput,
 } from './specialty.schema.js'
+import { specialtyService } from './specialty.service.js'
 
 /**
  * Controllers translate HTTP into plain service calls and back.
