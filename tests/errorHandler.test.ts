@@ -18,58 +18,78 @@ import {
  * constraint is not at `meta.target`.
  */
 
-describe('p2002Fields: reading columns out of Prisma metadata', () => {
+describe('p2002Fields: resolving fields from Prisma metadata', () => {
   it('reads the column names Postgres reported', () => {
     expect(
       p2002Fields(uniqueViolationMeta({ detail: 'Key (title)=(Cardiology) exists.' })),
     ).toEqual(['title'])
   })
 
-  it('reads every column of a composite index', () => {
+  it('reads every column of a composite key from the detail line', () => {
+    // `title` and `createdAt` are both real Specialty fields, so a composite
+    // unique index over them is representable.
     expect(
       p2002Fields(
-        uniqueViolationMeta({ detail: 'Key (patientId, scheduledAt)=(p1, t1) already exists.' }),
+        uniqueViolationMeta({ detail: 'Key (title, createdAt)=(p1, t1) already exists.' }),
       ),
-    ).toEqual(['patientId', 'scheduledAt'])
+    ).toEqual(['title', 'createdAt'])
   })
 
   it('ignores the conflicting value, capturing only names left of )=', () => {
     const meta = uniqueViolationMeta({
-      detail: 'Key (email)=(grace.hopper@example.com) already exists.',
+      detail: 'Key (title)=(Cardiology) already exists.',
     })
 
-    expect(p2002Fields(meta)).toEqual(['email'])
-    expect(JSON.stringify(p2002Fields(meta))).not.toContain('grace.hopper')
+    expect(p2002Fields(meta)).toEqual(['title'])
   })
 
-  it('recovers the column from the index name when there is no detail line', () => {
-    // This is the shape a real violation of the current schema has: the adapter
-    // drops Postgres's detail line after using it to build `constraint.index`,
-    // so the index name is the only source left. Verified against a live
-    // database in `specialties.db.test.ts`.
+  it('never reads the value, even when it resembles a field name', () => {
+    const meta = uniqueViolationMeta({
+      detail: 'Key (title)=(createdAt) already exists.',
+    })
+
+    // `createdAt` is a real field, but it appears as the *value*, so it must
+    // not be picked up.
+    expect(p2002Fields(meta)).toEqual(['title'])
+  })
+
+  it('recovers the field from the index name when there is no detail line', () => {
+    // The shape a real violation of the current schema has: the adapter drops
+    // Postgres's detail line after using it to build `constraint.index`, so the
+    // index name is the only source left. Verified against a live database in
+    // `specialties.db.test.ts`.
     expect(
       p2002Fields(uniqueViolationMeta({ detail: 'plain', index: 'specialties_title_key' })),
     ).toEqual(['title'])
   })
 
-  it('recovers a column whose own name contains an underscore', () => {
-    expect(
-      p2002Fields(uniqueViolationMeta({ detail: 'plain', index: 'patients_first_name_key' })),
-    ).toEqual(['first_name'])
-  })
-
-  it('cannot split a multi-column index name, and says so by joining it', () => {
-    // Prisma names a multi-column unique index `<table>_<col1>_<col2>_key`, but
-    // the name alone does not mark where the table stops and the columns begin,
-    // and a column may legitimately contain an underscore (`first_name`). The
-    // joined value is returned rather than guessed at. The current schema has
-    // no composite unique index, and a real one is covered by the detail-line
-    // case handled in `specialties.db.test.ts`.
+  it('splits a composite index name back into its real fields', () => {
+    // Caveat this fixes: `patientId_scheduledAt` is two names, not one. Without
+    // splitting, the client would be told to look for a field that cannot exist.
     expect(
       p2002Fields(
-        uniqueViolationMeta({ detail: 'plain', index: 'appointment_patientId_scheduledAt_key' }),
+        uniqueViolationMeta({ detail: 'plain', index: 'specialties_title_createdAt_key' }),
       ),
-    ).toEqual(['patientId_scheduledAt'])
+    ).toEqual(['title', 'createdAt'])
+  })
+
+  it('drops a candidate that is not a field of the model', () => {
+    // Namely the failure mode if the mapping is ever wrong: no invented field.
+    expect(
+      p2002Fields(uniqueViolationMeta({ detail: 'plain', index: 'specialties_nonsense_key' })),
+    ).toEqual([])
+  })
+
+  it('does not echo a mapped column name the client has never seen', () => {
+    // With `@map("specialty_title")` on `title`, the index becomes
+    // `specialties_specialty_title_key`. `specialty_title` is not a field name,
+    // so nothing is claimed and the caller stays generic — better than naming a
+    // field the client cannot match against its input.
+    expect(
+      p2002Fields(
+        uniqueViolationMeta({ detail: 'plain', index: 'specialties_specialty_title_key' }),
+      ),
+    ).toEqual([])
   })
 
   it('never returns the raw index name', () => {
@@ -77,33 +97,35 @@ describe('p2002Fields: reading columns out of Prisma metadata', () => {
     expect(JSON.stringify(p2002Fields(meta))).not.toContain('specialties_title_key')
   })
 
-  it('falls back to constraint.fields when there is no index either', () => {
-    expect(p2002Fields(uniqueViolationMeta({ detail: 'plain', fields: ['email'] }))).toEqual([
-      'email',
+  it('falls back to constraint.fields when there is no detail or index', () => {
+    expect(p2002Fields(uniqueViolationMeta({ detail: 'plain', fields: ['title'] }))).toEqual([
+      'title',
     ])
   })
 
-  it('prefers the detail line, which can name every column of a composite key', () => {
+  it('prefers the detail line over the index', () => {
     const meta = uniqueViolationMeta({
-      detail: 'Key (patientId, scheduledAt)=(p1, t1) already exists.',
-      index: 'appointment_patientId_scheduledAt_key',
+      detail: 'Key (description)=(x) already exists.',
+      index: 'specialties_title_key',
     })
 
-    expect(p2002Fields(meta)).toEqual(['patientId', 'scheduledAt'])
+    expect(p2002Fields(meta)).toEqual(['description'])
   })
 
-  it('drops entries that are not plain identifiers', () => {
+  it('drops candidates that are not bare identifiers', () => {
     const meta = uniqueViolationMeta({
-      detail: 'Key (title, "quoted", schema.col, ok_2)=(a, b, c, d) already exists.',
+      detail: 'Key (title, "quoted", schema.title)=(a, b, c) already exists.',
     })
 
-    expect(p2002Fields(meta)).toEqual(['title', 'ok_2'])
+    // `"quoted"` and `schema.title` are not bare identifiers, so they never
+    // become candidates. `title` is a real field and survives.
+    expect(p2002Fields(meta)).toEqual(['title'])
   })
 
-  it('returns no duplicates when a column repeats', () => {
-    expect(p2002Fields(uniqueViolationMeta({ detail: 'Key (a, a, a)=(1, 2, 3) exists.' }))).toEqual(
-      ['a'],
-    )
+  it('returns no duplicates when a field repeats', () => {
+    expect(
+      p2002Fields(uniqueViolationMeta({ detail: 'Key (title, title, title)=(1, 2, 3) exists.' })),
+    ).toEqual(['title'])
   })
 
   it('handles missing, empty and malformed metadata without throwing', () => {
@@ -115,15 +137,30 @@ describe('p2002Fields: reading columns out of Prisma metadata', () => {
     expect(p2002Fields(uniqueViolationMeta({ detail: 'no key detail at all' }))).toEqual([])
   })
 
+  it('stays generic when the model is unknown, rather than trusting the name', () => {
+    // Without a model there is no field list to validate against, so no claim
+    // is made. This is the guard that keeps a raw index name from escaping.
+    expect(
+      p2002Fields(
+        uniqueViolationMeta({ detail: 'plain', index: 'specialties_title_key', modelName: 'Nope' }),
+      ),
+    ).toEqual([])
+
+    // And when the key is absent altogether.
+    const meta = uniqueViolationMeta({ detail: 'plain', index: 'specialties_title_key' })
+    delete meta.modelName
+    expect(p2002Fields(meta)).toEqual([])
+  })
+
   it('handles a string element inside constraint.fields, and ignores non-strings', () => {
     const meta = uniqueViolationMeta({ detail: 'plain' })
     const cause = Reflect.get(Reflect.get(meta, 'driverAdapterError') as object, 'cause') as Record<
       string,
       unknown
     >
-    cause.constraint = { fields: ['title, email', 42, 'id'] }
+    cause.constraint = { fields: ['title, description', 42, 'icon'] }
 
-    expect(p2002Fields(meta)).toEqual(['title', 'email', 'id'])
+    expect(p2002Fields(meta)).toEqual(['title', 'description', 'icon'])
   })
 })
 
@@ -138,40 +175,50 @@ describe('error mapper: unique constraint violations', () => {
     expect(body.error.requestId).toBe('req-1')
   })
 
-  it('lists every column of a composite index', () => {
+  it('lists every field of a composite key', () => {
     const { body } = toResponse(
-      uniqueViolation({ detail: 'Key (patientId, scheduledAt)=(p1, 2026-01-01) already exists.' }),
+      uniqueViolation({ detail: 'Key (title, createdAt)=(t, 2026-01-01) already exists.' }),
       'req-2',
     )
 
-    expect(body.error.message).toBe('A record with this patientId, scheduledAt already exists')
-    expect(body.error.details).toEqual({ fields: ['patientId', 'scheduledAt'] })
+    expect(body.error.message).toBe('A record with this title, createdAt already exists')
+    expect(body.error.details).toEqual({ fields: ['title', 'createdAt'] })
   })
 
   it('never leaks the conflicting value into the message or details', () => {
     const secret = 'grace.hopper@example.com'
     const { body } = toResponse(
-      uniqueViolation({ detail: `Key (email)=(${secret}) already exists.` }),
+      uniqueViolation({ detail: `Key (description)=(${secret}) already exists.` }),
       'req-3',
     )
 
-    expect(body.error.details).toEqual({ fields: ['email'] })
+    expect(body.error.details).toEqual({ fields: ['description'] })
     expect(JSON.stringify(body)).not.toContain(secret)
   })
 
   it('falls back to the adapter-parsed fields when Postgres sent no detail', () => {
     const { body } = toResponse(
-      uniqueViolation({ detail: 'duplicate key value', fields: ['email'] }),
+      uniqueViolation({ detail: 'duplicate key value', fields: ['title'] }),
       'req-4',
     )
 
-    expect(body.error.details).toEqual({ fields: ['email'] })
+    expect(body.error.details).toEqual({ fields: ['title'] })
   })
 
-  it('names the column while never echoing the raw index name', () => {
-    // The index is the only source here, and it yields the column. What must
-    // not happen is the index name itself reaching the client: it embeds the
-    // table name and would be wrong after an `@map` rename.
+  it('names every field of a composite index, split from the index name', () => {
+    const { body } = toResponse(
+      uniqueViolation({ detail: 'duplicate key value', index: 'specialties_title_createdAt_key' }),
+      'req-4b',
+    )
+
+    expect(body.error.message).toBe('A record with this title, createdAt already exists')
+    expect(body.error.details).toEqual({ fields: ['title', 'createdAt'] })
+  })
+
+  it('names the field while never echoing the raw index name', () => {
+    // The index is the only source here, and it yields the field. What must not
+    // happen is the index name itself reaching the client: it embeds the table
+    // name and is not something the client can match against an input.
     const { statusCode, body } = toResponse(
       uniqueViolation({ detail: 'duplicate key value', index: 'specialties_title_key' }),
       'req-5',

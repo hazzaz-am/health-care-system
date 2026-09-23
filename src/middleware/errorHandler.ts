@@ -77,16 +77,17 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
  * `)=` means the conflicting *value* is never read.
  *
  * Not every violation carries this: the driver adapter parses `detail` to build
- * `constraint.index` and then drops it, so a uniquely-indexed column arrives
- * with no detail line at all. That is why `indexColumn` below exists.
+ * `constraint.index` and then drops it, so a uniquely-indexed column usually
+ * arrives with no detail line at all — which is why the index name below is the
+ * source that matters in practice.
  */
 const KEY_DETAIL = /Key \(([^)]+)\)=/
 
 /**
- * Prisma names a single-column unique index `<table>_<column>_key`, so the
- * column is whatever sits between the first underscore and the `_key` suffix.
- * Anchored on both ends to avoid matching an unrelated string that merely
- * contains `_key`.
+ * Prisma names a unique index `<table>_<columns>_key`, so the part between the
+ * first underscore and the `_key` suffix is the column list — one name, or
+ * several joined by underscores. Anchored on both ends so an unrelated string
+ * that merely contains `_key` is not mistaken for one of ours.
  */
 const NAMED_KEY_INDEX = /^[^_]+_(.+)_key$/
 
@@ -96,6 +97,55 @@ const SAFE_COLUMN = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** A plain object we can safely read properties from. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+/**
+ * Split a joined column list back into model fields by consuming it left to
+ * right, longest field name first.
+ *
+ * Longest-first is what makes this deterministic when one field name is a
+ * prefix of another (`id` and `identifier`, or `title` and `titleShort`):
+ * trying the longer name first avoids a shorter match that would strand the
+ * remainder. Backtracking still runs, so an early guess that cannot consume the
+ * whole string is abandoned rather than returned.
+ *
+ * `undefined` when no combination of fields consumes the input exactly, which
+ * is how a name that is not a field list at all gets rejected.
+ */
+function segment(value: string, fields: readonly string[]): string[] | undefined {
+  if (value === '') return []
+  for (const field of [...fields].sort((a, b) => b.length - a.length)) {
+    if (value === field) return [field]
+    if (!value.startsWith(`${field}_`)) continue
+    const rest = segment(value.slice(field.length + 1), fields)
+    if (rest !== undefined) return [field, ...rest]
+  }
+  return undefined
+}
+
+/**
+ * Interpret one candidate as the set of fields it names.
+ *
+ * Returns `[]` when the candidate is not a field of the model, in any spelling —
+ * which is what keeps an index name out of the response.
+ */
+function resolveCandidate(candidate: string, fields: readonly string[]): string[] {
+  if (fields.includes(candidate)) return [candidate]
+  return segment(candidate, fields) ?? []
+}
+
+/**
+ * The scalar field names of a Prisma model, read from the generated client.
+ *
+ * Sourced from Prisma's field enum rather than a hand-written list, so it
+ * cannot drift from `schema.prisma`. Indexing the namespace by computed name is
+ * what keeps this generic instead of a `switch` per model.
+ */
+function modelFields(modelName: unknown): readonly string[] {
+  if (typeof modelName !== 'string') return []
+  const fieldEnum = Prisma[`${modelName}ScalarFieldEnum` as keyof typeof Prisma]
+  if (!isRecord(fieldEnum)) return []
+  return Object.values(fieldEnum).filter((field): field is string => typeof field === 'string')
 }
 
 /**
@@ -110,20 +160,6 @@ function splitColumns(value: string): string[] {
 }
 
 /**
- * Recover the column from a named single-column unique index, inverting
- * Prisma's `<table>_<column>_key` naming.
- *
- * `undefined` when the name does not fit that shape, which is the honest answer
- * for a hand-written multi-column index: `a_b_c_key` does not say where the
- * table ends and the column starts, so guessing could name a nonexistent field.
- */
-function indexColumn(index: unknown): string | undefined {
-  if (typeof index !== 'string') return undefined
-  const column = NAMED_KEY_INDEX.exec(index)?.[1]
-  return column !== undefined && SAFE_COLUMN.test(column) ? column : undefined
-}
-
-/**
  * The columns that collided in a Prisma `P2002`, or `[]` to stay generic.
  *
  * Exported so it can be tested against each metadata shape directly; the
@@ -133,19 +169,17 @@ function indexColumn(index: unknown): string | undefined {
  * `meta.target` that older engine-based Prisma exposed. Three sources are read,
  * in order of what they can actually be trusted to say:
  *
- * 1. Postgres's `detail` line, when present. It is the only source that names
- *    every column of a composite key.
- * 2. `constraint.index`, the physical index name, which is the *only* source a
- *    named-index violation has. It names one column, inferred from the name.
- * 3. `constraint.fields`, an array the adapter fills in only when Postgres
- *    reported no constraint name. In practice this is rare, because a unique
- *    index almost always has a name — it is kept because the cost is two lines.
+ * 1. Postgres's `detail` line (`Key (title)=(Cardiology)`), which names columns
+ *    directly but is discarded by the driver adapter on a named-index
+ *    violation — so in practice this is the rare path.
+ * 2. `constraint.fields`, an array the adapter fills in only when Postgres
+ *    reported no constraint name.
+ * 3. `constraint.index`, the physical index name, which is the only source a
+ *    named-index violation has.
  *
- * These are **database column names**, not Prisma model field names. The two
- * coincide today because the schema declares no `@map`. Add
- * `@map("specialty_title")` and source 2 yields `specialty_title`, while source
- * 1 would still yield the true column — so the result is a column name either
- * way, and inverting it would need the generated client's runtime data model.
+ * Every candidate from any source is resolved through the model's real fields
+ * before being returned, so the result is always a set of field names the
+ * client can act on — never a raw column or index name.
  */
 export function p2002Fields(meta: Record<string, unknown> | undefined): string[] {
   const adapterError = meta?.driverAdapterError
@@ -154,25 +188,38 @@ export function p2002Fields(meta: Record<string, unknown> | undefined): string[]
   const cause = adapterError.cause
   if (!isRecord(cause)) return []
 
-  const fromDetail =
+  const fields = modelFields(meta?.modelName)
+  if (fields.length === 0) return []
+
+  const detail =
     typeof cause.originalMessage === 'string'
       ? KEY_DETAIL.exec(cause.originalMessage)?.[1]
       : undefined
-  if (fromDetail !== undefined) {
-    const columns = splitColumns(fromDetail)
-    if (columns.length > 0) return [...new Set(columns)]
-  }
 
   const constraint = isRecord(cause.constraint) ? cause.constraint : undefined
+  const reported = constraint?.fields
+  const index =
+    typeof constraint?.index === 'string' && NAMED_KEY_INDEX.test(constraint.index)
+      ? [constraint.index.slice(constraint.index.indexOf('_') + 1, -'_key'.length)]
+      : []
 
-  const fromIndex = indexColumn(constraint?.index)
-  if (fromIndex !== undefined) return [fromIndex]
+  // Ordered by trust. Each source is resolved as a whole, because a composite
+  // key is only meaningful across all of its columns plus any extras a
+  // lower-trust source may add — a partial answer would under-name the conflict.
+  const sources: string[][] = [
+    detail === undefined ? [] : splitColumns(detail),
+    Array.isArray(reported)
+      ? reported.flatMap((field) => (typeof field === 'string' ? splitColumns(field) : []))
+      : [],
+    index,
+  ]
 
-  const fields = constraint?.fields
-  if (!Array.isArray(fields)) return []
+  for (const source of sources) {
+    const names = source.flatMap((candidate) => resolveCandidate(candidate, fields))
+    if (names.length > 0) return [...new Set(names)]
+  }
 
-  const columns = fields.flatMap((field) => (typeof field === 'string' ? splitColumns(field) : []))
-  return [...new Set(columns)]
+  return []
 }
 
 export function toResponse(

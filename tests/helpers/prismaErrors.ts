@@ -33,14 +33,18 @@ export interface UniqueViolationOptions {
   fields?: string[]
   /** The physical table name. */
   table?: string
+  /** Prisma model the violation occurred on; the real meta always carries one. */
+  modelName?: string
 }
 
 /**
  * The nested `meta` the adapter produces, so tests exercise the mapper against
- * a real shape rather than a hand-rolled approximation.
+ * a real shape rather than a hand-rolled approximation. The shape here was
+ * copied from a live error — see `specialties.db.test.ts`, which asserts against
+ * one — because reading it out of the adapter source proved misleading.
  */
 export function uniqueViolationMeta(options: UniqueViolationOptions = {}): Record<string, unknown> {
-  const { detail, index, fields, table } = options
+  const { detail, index, fields, table, modelName = 'Specialty' } = options
 
   const constraint = fields !== undefined ? { fields } : index === undefined ? undefined : { index }
 
@@ -53,7 +57,10 @@ export function uniqueViolationMeta(options: UniqueViolationOptions = {}): Recor
   }
   if (table !== undefined) cause.table = table
 
-  const meta: Record<string, unknown> = { driverAdapterError: new DriverAdapterError(cause) }
+  const meta: Record<string, unknown> = {
+    driverAdapterError: new DriverAdapterError(cause),
+    modelName,
+  }
   if (table !== undefined) meta.table = table
 
   return meta
